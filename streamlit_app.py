@@ -6,37 +6,25 @@ import numpy as np
 import openpyxl
 import io
 
-# Set Streamlit page configuration
 st.set_page_config(page_title="SPC & Quality Analysis Agent", layout="wide")
-
-# Title
 st.title(" SPC & Quality Analysis Agent")
 
-# File uploader
 uploaded_file = st.file_uploader("Upload an Excel file", type=["xlsx", "xls"])
 
 def download_chart(fig, filename):
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     buf.seek(0)
-    st.download_button(
-        label=" Download Chart as PNG",
-        data=buf,
-        file_name=filename,
-        mime="image/png"
-    )
+    st.download_button(label=" Download Chart as PNG", data=buf, file_name=filename, mime="image/png")
 
-# If file is uploaded
 if uploaded_file:
     try:
-        # Get sheet names and require selection
         xls = pd.ExcelFile(uploaded_file)
         sheet_name = st.selectbox("Select sheet to load (required)", xls.sheet_names)
         if not sheet_name:
             st.warning("Please select a sheet to proceed.")
             st.stop()
 
-        # Load selected sheet
         df = pd.read_excel(uploaded_file, sheet_name=sheet_name, engine='openpyxl')
         st.success(f"Data loaded successfully from sheet: {sheet_name}")
         st.write("### Data Preview")
@@ -45,14 +33,14 @@ if uploaded_file:
         st.error(f"Error loading file: {e}")
         st.stop()
 
-    # Tool selection
     tool = st.selectbox("Choose Analysis Tool", [
         "SPC Individuals Chart",
         "Pareto Chart",
         "Boxplot",
         "Scatterplot",
         "Run Chart",
-        "Pivot Table"
+        "Pivot Table",
+        "Capability Index Analysis"
     ])
 
     # SPC Individuals Chart
@@ -158,12 +146,7 @@ if uploaded_file:
 
             if outlier_data is not None and not outlier_data.empty:
                 outlier_csv = outlier_data.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label=" Download Outliers as CSV",
-                    data=outlier_csv,
-                    file_name="outliers.csv",
-                    mime="text/csv"
-                )
+                st.download_button(label=" Download Outliers as CSV", data=outlier_csv, file_name="outliers.csv", mime="text/csv")
 
     # Scatterplot with regression
     elif tool == "Scatterplot":
@@ -221,13 +204,100 @@ if uploaded_file:
             st.pyplot(fig)
             download_chart(fig, "run_chart.png")
 
-    # Pivot Table
+    # Pivot Table with safeguards
     elif tool == "Pivot Table":
-        index_col = st.selectbox("Select index column", df.columns)
+        index_cols = st.multiselect("Select index columns", df.columns)
+        column_cols = st.multiselect("Select columns (optional)", df.columns)
         value_col = st.selectbox("Select value column", df.columns)
         aggfunc = st.selectbox("Select aggregation function", ["mean", "sum", "count"])
 
         if st.button("Generate Pivot Table"):
-            pivot_df = pd.pivot_table(df, index=index_col, values=value_col, aggfunc=aggfunc)
-            st.write("### Pivot Table")
-            st.dataframe(pivot_df)
+            try:
+                # Remove duplicates between index and columns
+                index_cols = [col for col in index_cols if col not in column_cols]
+
+                # Convert non-scalar values to strings
+                for col in index_cols + column_cols:
+                    if not pd.api.types.is_scalar(df[col].iloc[0]):
+                        df[col] = df[col].astype(str)
+
+                pivot_df = pd.pivot_table(df,
+                                           index=index_cols if index_cols else None,
+                                           columns=column_cols if column_cols else None,
+                                           values=value_col,
+                                           aggfunc=aggfunc)
+
+                st.write("### Pivot Table")
+                st.dataframe(pivot_df)
+
+                pivot_csv = pivot_df.to_csv().encode('utf-8')
+                st.download_button(label=" Download Pivot Table as CSV", data=pivot_csv,
+                                   file_name="pivot_table.csv", mime="text/csv")
+            except Exception as e:
+                st.error(f"Error generating pivot table: {e}")
+
+    # Capability Index Analysis with single-sided tolerance
+    elif tool == "Capability Index Analysis":
+        col = st.selectbox("Select numeric column for capability analysis", df.columns)
+        lsl = st.text_input("Enter Lower Spec Limit (optional)", "")
+        usl = st.text_input("Enter Upper Spec Limit (optional)", "")
+        index_type = st.radio("Select index type", ["Cp", "Cpk", "Ppk"])
+
+        if st.button("Calculate Capability Index"):
+            data = pd.to_numeric(df[col], errors='coerce').dropna()
+            mean_val = data.mean()
+            std_within = data.std(ddof=1)
+            std_overall = data.std(ddof=0)
+
+            lsl_val = float(lsl) if lsl.strip() != "" else None
+            usl_val = float(usl) if usl.strip() != "" else None
+
+            cp = None
+            if lsl_val is not None and usl_val is not None and std_within > 0:
+                cp = (usl_val - lsl_val) / (6 * std_within)
+
+            cpk = None
+            if std_within > 0:
+                vals = []
+                if usl_val is not None:
+                    vals.append((usl_val - mean_val) / (3 * std_within))
+                if lsl_val is not None:
+                    vals.append((mean_val - lsl_val) / (3 * std_within))
+                if vals:
+                    cpk = min(vals)
+
+            ppk = None
+            if std_overall > 0:
+                vals = []
+                if usl_val is not None:
+                    vals.append((usl_val - mean_val) / (3 * std_overall))
+                if lsl_val is not None:
+                    vals.append((mean_val - lsl_val) / (3 * std_overall))
+                if vals:
+                    ppk = min(vals)
+
+            if index_type == "Cp":
+                index_value = cp if cp is not None else 0
+            elif index_type == "Cpk":
+                index_value = cpk if cpk is not None else 0
+            else:
+                index_value = ppk if ppk is not None else 0
+
+            capability_score = min(index_value / 1.33 * 100, 10000) if index_value > 0 else 0
+
+            st.write(f"**{index_type} = {index_value:.3f}**")
+            st.metric(label="Capability Score (%)", value=f"{capability_score:.2f}%")
+
+            fig, ax = plt.subplots(figsize=(8, 6))
+            sns.histplot(data, bins=20, ax=ax, color='skyblue')
+            if lsl_val is not None:
+                ax.axvline(lsl_val, color='green', linestyle='--', label=f'LSL = {lsl_val}')
+            if usl_val is not None:
+                ax.axvline(usl_val, color='red', linestyle='--', label=f'USL = {usl_val}')
+            ax.axvline(mean_val, color='black', linestyle='-', label=f'Mean = {mean_val:.2f}')
+            ax.set_title("Capability Index Analysis")
+            ax.set_xlabel(col)
+            ax.set_ylabel("Frequency")
+            ax.legend()
+            st.pyplot(fig)
+            download_chart(fig, "capability_index.png")
