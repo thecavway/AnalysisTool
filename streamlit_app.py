@@ -63,23 +63,27 @@ if uploaded_file:
 
         if st.button("Generate SPC Chart"):
             fig, ax = plt.subplots(figsize=(12, 6))
-            ax.plot(data, marker='o', linestyle='-', color='black')
+            ax.plot(data, marker='o', linestyle='-', color='black', markersize=4)
 
-            split_points = [0] + recalc_points + [len(data)]
+            if recalc_points:  # Split limits mode
+                split_points = [0] + recalc_points + [len(data)]
+                for i in range(len(split_points)-1):
+                    seg_start = split_points[i]
+                    seg_end = split_points[i+1]
+                    segment = data[seg_start:seg_end]
+                    mean_val = pd.Series(segment).mean()
+                    std_val = pd.Series(segment).std()
+                    ax.hlines(mean_val, seg_start, seg_end-1, colors='blue', linestyles='--')
+                    ax.hlines(mean_val + 3 * std_val, seg_start, seg_end-1, colors='red', linestyles=':')
+                    ax.hlines(mean_val - 3 * std_val, seg_start, seg_end-1, colors='red', linestyles=':')
+            else:  # Subset mode
+                mean_val = pd.Series(subset_data).mean()
+                std_val = pd.Series(subset_data).std()
+                ax.hlines(mean_val, 0, len(data)-1, colors='blue', linestyles='--')
+                ax.hlines(mean_val + 3 * std_val, 0, len(data)-1, colors='red', linestyles=':')
+                ax.hlines(mean_val - 3 * std_val, 0, len(data)-1, colors='red', linestyles=':')
 
-            for i in range(len(split_points)-1):
-                seg_start = split_points[i]
-                seg_end = split_points[i+1]
-                segment = data[seg_start:seg_end]
-
-                mean_val = pd.Series(segment).mean()
-                std_val = pd.Series(segment).std()
-
-                ax.hlines(mean_val, seg_start, seg_end-1, colors='blue', linestyles='--')
-                ax.hlines(mean_val + 3 * std_val, seg_start, seg_end-1, colors='red', linestyles=':')
-                ax.hlines(mean_val - 3 * std_val, seg_start, seg_end-1, colors='red', linestyles=':')
-
-            ax.set_title("SPC Chart with Split Control Limits")
+            ax.set_title("SPC Individuals Chart")
             ax.set_xlabel("Observation")
             ax.set_ylabel(col)
             st.pyplot(fig)
@@ -148,7 +152,7 @@ if uploaded_file:
                 outlier_csv = outlier_data.to_csv(index=False).encode('utf-8')
                 st.download_button(label=" Download Outliers as CSV", data=outlier_csv, file_name="outliers.csv", mime="text/csv")
 
-    # Scatterplot with regression
+    # Scatterplot
     elif tool == "Scatterplot":
         x_col = st.selectbox("Select X-axis column", df.columns)
         y_col = st.selectbox("Select Y-axis column", df.columns)
@@ -204,7 +208,7 @@ if uploaded_file:
             st.pyplot(fig)
             download_chart(fig, "run_chart.png")
 
-    # Pivot Table with safeguards
+    # Pivot Table
     elif tool == "Pivot Table":
         index_cols = st.multiselect("Select index columns", df.columns)
         column_cols = st.multiselect("Select columns (optional)", df.columns)
@@ -213,30 +217,27 @@ if uploaded_file:
 
         if st.button("Generate Pivot Table"):
             try:
-                # Remove duplicates between index and columns
                 index_cols = [col for col in index_cols if col not in column_cols]
-
-                # Convert non-scalar values to strings
                 for col in index_cols + column_cols:
                     if not pd.api.types.is_scalar(df[col].iloc[0]):
                         df[col] = df[col].astype(str)
 
                 pivot_df = pd.pivot_table(df,
-                                           index=index_cols if index_cols else None,
-                                           columns=column_cols if column_cols else None,
-                                           values=value_col,
-                                           aggfunc=aggfunc)
+                    index=index_cols if index_cols else None,
+                    columns=column_cols if column_cols else None,
+                    values=value_col,
+                    aggfunc=aggfunc)
 
                 st.write("### Pivot Table")
                 st.dataframe(pivot_df)
 
                 pivot_csv = pivot_df.to_csv().encode('utf-8')
                 st.download_button(label=" Download Pivot Table as CSV", data=pivot_csv,
-                                   file_name="pivot_table.csv", mime="text/csv")
+                    file_name="pivot_table.csv", mime="text/csv")
             except Exception as e:
                 st.error(f"Error generating pivot table: {e}")
 
-    # Capability Index Analysis with single-sided tolerance
+    # Capability Index Analysis
     elif tool == "Capability Index Analysis":
         col = st.selectbox("Select numeric column for capability analysis", df.columns)
         lsl = st.text_input("Enter Lower Spec Limit (optional)", "")
